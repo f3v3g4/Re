@@ -1,0 +1,157 @@
+***************************************************************************************
+                                     registry
+***************************************************************************************
+
+1) Instalar docker 
+
+sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+sudo dnf install docker-ce docker-ce-cli containerd.io
+
+systemctl enable docker
+systemctl start docker
+systemctl status docker
+
+2) Crear certificado autofirmado para el servidor de imágenes (registry) en el directorio /home/kubeadmin/docker_temp/certs
+
+mkdir -p /home/kubeadmin/docker_temp/certs && cd /home/kubeadmin/docker_temp/certs
+
+3) Crear el archivo ssl.conf con el siguiente contenido:
+
+vi ssl.conf
+
+# Self Signed (note the addition of -x509): 
+# openssl req -config example-com.conf -new -x509 -sha256 -newkey rsa:2048 -nodes -keyout example-com.key.pem -days 365 -out example-com.cert.pem 
+# Signing Request (note the lack of -x509): 
+# openssl req -config example-com.conf -new -newkey rsa:2048 -nodes -keyout example-com.key.pem -days 365 -out examplecom.req.pem # Print it: 
+# openssl x509 -in example-com.cert.pem -text -noout 
+# openssl req -in example-com.req.pem -text -noout 
+
+[ req ] 
+default_bits = 4096
+default_keyfile = server-key.pem 
+distinguished_name = subject 
+req_extensions = req_ext 
+x509_extensions = x509_ext 
+string_mask = utf8only 
+
+# The Subject DN can be formed using X501 or RFC 4514 (see RFC 4519 for a description). 
+#   Its sort of a mashup. For example, RFC 4514 does not provide emailAddress. 
+
+[ subject ] 
+countryName = VE 
+countryName_default = VE
+stateOrProvinceName = DC 
+stateOrProvinceName_default = CCS 
+organizationUnit = FIRMCO 
+organizationUnit_default = TEC 
+localityName = CCS 
+localityName_default = CCS 
+organizationName = FIRMCO 
+organizationName_default  = FIRMCO 
+
+# Use a friendly name here because its presented to the user. The server's DNS 
+# names are placed in Subject Alternate Names. Plus, DNS names here is deprecated
+# by both IETF and CA/Browser Forums. If you place a DNS name here, then you
+# must include the DNS name in the SAN too (otherwise, Chrome and others that
+# strictly follow the CA/Browser Baseline Requirements will fail).
+
+commonName = Registry 
+commonName_default = Registry
+
+emailAddress = admin@firmwareco.com 
+emailAddress_default = admin@firmwareco.com
+
+# Section x509_ext is used when generating a self-signed certificate. I.e., openssl req -x509 ... 
+# If RSA Key Transport bothers you, then remove keyEncipherment. TLS 1.3 is removing RSA 
+# Key Transport in favor of exchanges with Forward Secrecy, like DHE and ECDHE.
+
+[ x509_ext ]
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid,issuer
+basicConstraints = CA:FALSE
+keyUsage = digitalSignature, keyEncipherment
+subjectAltName = IP:192.168.10.17
+nsComment = "OpenSSL Generated Certificate"
+
+# RFC 5280, Section 4.2.1.12 makes EKU optional 
+# CA/Browser Baseline Requirements, Appendix (B)(3)(G) makes me confused 
+# extendedKeyUsage = serverAuth, clientAuth
+# Section req_ext is used when generating a certificate signing request. I.e., openssl req ...
+
+[ req_ext ]
+subjectKeyIdentifier = hash
+basicConstraints = CA:FALSE
+keyUsage = digitalSignature, keyEncipherment
+subjectAltName = IP:192.168.20.27
+nsComment = "OpenSSL Generated Certificate"
+
+#RFC 5280, Section 4.2.1.12 makes EKU optional 
+# CA/Browser Baseline Requirements, Appendix (B)(3)(G) makes me confused 
+# extendedKeyUsage = serverAuth, clientAuth
+
+[ alternate_names ]
+DNS.1 = example.com 
+DNS.2 = www.example.com 
+DNS.3 = mail.example.com 
+DNS.4 = ftp.example.com
+
+4) Generar el certificado 
+
+openssl req -config ssl.conf -new -x509 -sha256 -newkey rsa:4096 -nodes -keyout domain.key -days 3650 -out domain.crt
+
+5)Crear en todos los nodos incluyendo el mismo servidor de imágenes docker registry (masters,workers y registry) 
+el directorio /etc/docker/certs.d/192.168.20.27:4443/ donde 192.168.20.27 es la IP del servidor de imágenes Docker (registry) y 4443 es el puerto configurado para escuchar
+
+mkdir -p /etc/docker/certs.d/10.134.0.252:4443/
+
+6) Luego copiar el certificado generado en el punto anterior domain.crt en el directorio creado
+En el servidor registry:
+
+cp /home/kubeadmin/docker_temp/certs/domain.crt /etc/docker/certs.d/192.168.10.17:4443/
+
+Desde el servidor registry a los nodos masters y workers:
+
+scp domain.crt root@192.168.10.18:/etc/docker/certs.d/192.168.10.17:4443/
+scp domain.crt root@192.168.10.20:/etc/docker/certs.d/192.168.10.17:4443/
+scp domain.crt root@192.168.10.21:/etc/docker/certs.d/192.168.10.17:4443/
+scp domain.crt root@192.168.10.22:/etc/docker/certs.d/192.168.10.17:4443/
+scp domain.crt root@192.168.10.23:/etc/docker/certs.d/192.168.20.27:4443/
+
+7) crear el archivo daemon.json en todos los servidores con el siguiente contenido
+
+vi /etc/docker/daemon.json
+
+{
+  "insecure-registries" : ["docker-registry-machine-name:4443","docker-registry-machine-name:80","0.0.0.0/0"]
+
+}
+
+
+8) Crear el contenedor registry para el repositorio de imágenes, antes, verificar si no existe ya un contenedor registry
+
+NOTA IMPORTANTE: Ejecutar el comando de creación del contenedor “registry” desde el directorio /home/kubeadmin/docker_temp/
+
+cd /home/kubeadmin/docker_temp/
+
+docker run -d --restart=always --name registry -v `pwd`/certs:/certs -e REGISTRY_HTTP_ADDR=0.0.0.0:4443 -e REGISTRY_HTTP_TLS_CERTIFICATE=certs/domain.crt -e REGISTRY_HTTP_TLS_KEY=certs/domain.key -p 4443:4443 registry:2
+
+
+9) ejecutar el comandos docker ps para verificar la creacion del contendor 
+
+docker ps
+
+10) ver la imagenes de docker 
+
+docker images 
+
+
+11) Descargar la imagen “alpine”, tagearla y pushearla para publicarla en el registry privado:
+
+docker pull alpine
+docker tag alpine 192.168.10.17:4443/alpinefirmco
+docker push 192.168.20.27:4443/alpinefirmco
+
+
+12) Verificar el catálogo de imágenes disponibles:
+
+curl https://10.192.168.10.17:4443/v2/_catalog --insecure
