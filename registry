@@ -82,7 +82,7 @@ nsComment = "OpenSSL Generated Certificate"
 subjectKeyIdentifier = hash
 basicConstraints = CA:FALSE
 keyUsage = digitalSignature, keyEncipherment
-subjectAltName = IP:192.168.20.27
+subjectAltName = IP:192.168.10.17
 nsComment = "OpenSSL Generated Certificate"
 
 #RFC 5280, Section 4.2.1.12 makes EKU optional 
